@@ -10,6 +10,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "gpt-tokenizer": "^3.4.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
 import { StatsDashboard } from "./components/StatsDashboard";
 import { MessageList } from "./components/MessageList";
 import { ExportPanel } from "./components/ExportPanel";
+const SlicerPanel = lazy(() => import("./components/SlicerPanel").then((m) => ({ default: m.SlicerPanel })));
 import { parseFiles, buildIdIndex } from "./lib/parser";
 import { computeStats } from "./lib/stats";
 import type { ChatStats, Message } from "./types";
 import { fmtNumber, classNames } from "./lib/format";
 
-type Tab = "stats" | "messages" | "export";
+type Tab = "stats" | "messages" | "export" | "slicer";
 
 interface LoadedState {
   title: string;
@@ -67,7 +68,7 @@ export function App() {
           </div>
           {loaded && (
             <nav className="flex gap-1 ml-4">
-              {(["stats", "messages", "export"] as const).map((t) => (
+              {(["stats", "messages", "slicer", "export"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
@@ -132,6 +133,15 @@ export function App() {
         {loaded && tab === "stats" && <StatsDashboard stats={loaded.stats} />}
         {loaded && tab === "messages" && (
           <MessageList messages={loaded.messages} idIndex={loaded.idIndex} />
+        )}
+        {loaded && tab === "slicer" && (
+          <Suspense fallback={<div className="text-zinc-400 py-12 text-center">Loading slicer…</div>}>
+            <SlicerPanel
+              messages={loaded.messages}
+              stats={loaded.stats}
+              title={loaded.title}
+            />
+          </Suspense>
         )}
         {loaded && tab === "export" && (
           <ExportPanel
