@@ -103,6 +103,8 @@ export interface ChatStats {
   dailySenderMedia: Record<string, Record<string, number>>;
 }
 
+export type ExportFormat = "markdown" | "json" | "html";
+
 export interface ParseResult {
   messages: Message[];
   stats: ChatStats;

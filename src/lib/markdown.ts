@@ -14,6 +14,164 @@ export interface ExportOptions {
   title: string | null;
 }
 
+/* ---------- unicode visual helpers ---------- */
+
+const BAR_BLOCK = "█";
+
+function heatmap(dailyCounts: Record<string, number>, weeks = 12): string {
+  const dates = Object.keys(dailyCounts).sort();
+  if (!dates.length) return "";
+
+  const end = new Date(dates[dates.length - 1] + "T00:00:00Z");
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - weeks * 7);
+
+  const max = Math.max(...Object.values(dailyCounts), 1);
+  const lines: string[] = [];
+  lines.push("```");
+  lines.push("     " + Array.from({ length: weeks }, (_, i) => {
+    const d = new Date(start);
+    d.setUTCDate(d.getUTCDate() + i * 7);
+    return (d.getUTCMonth() + 1).toString().padStart(2, " ");
+  }).join("  "));
+
+  const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const showDays = [1, 3, 5]; // Mon, Wed, Fri
+  for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
+    const label = showDays.includes(dayIdx)
+      ? dayNames[dayIdx].padEnd(5)
+      : "     ";
+    const cells: string[] = [];
+    for (let w = 0; w < weeks; w++) {
+      const d = new Date(start);
+      d.setUTCDate(d.getUTCDate() + w * 7 + dayIdx);
+      const iso = d.toISOString().slice(0, 10);
+      const count = dailyCounts[iso] ?? 0;
+      if (count === 0) {
+        cells.push("  . ");
+      } else {
+        const intensity = Math.min(3, Math.ceil((count / max) * 3));
+        cells.push(`  ${BAR_BLOCK.repeat(intensity + 1)} `);
+      }
+    }
+    lines.push(`${label}${cells.join("")}`);
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
+function timeDistribution(messages: Message[]): string {
+  const hours = new Array(24).fill(0) as number[];
+  for (const m of messages) {
+    if (m.service || !m.timestamp) continue;
+    const match = m.timestamp.match(/(\d{2}):(\d{2})/);
+    if (match) hours[parseInt(match[1], 10)] += 1;
+  }
+  const max = Math.max(...hours, 1);
+  const lines: string[] = [];
+  lines.push("```");
+  for (let h = 0; h < 24; h++) {
+    const barLen = Math.round((hours[h] / max) * 30);
+    const bar = BAR_BLOCK.repeat(barLen);
+    lines.push(`${h.toString().padStart(2, "0")}:00  ${bar} ${hours[h]}`);
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
+function senderPersonality(msgs: Message[], stats: ChatStats): string {
+  const lines: string[] = [];
+  const senders = Object.entries(stats.senders);
+  if (!senders.length) return "";
+
+  for (const [name, s] of senders) {
+    const senderMsgs = msgs.filter((m) => m.sender === name && !m.service);
+    if (!senderMsgs.length) continue;
+
+    let emojiCount = 0;
+    for (const m of senderMsgs) {
+      const emojis = m.text.match(/[\u{1F300}-\u{1FAFF}]/gu) ?? [];
+      emojiCount += emojis.length;
+    }
+    const emojiPerMsg = senderMsgs.length ? (emojiCount / senderMsgs.length).toFixed(1) : "0";
+    const avgWordLen = s.words ? (s.chars / s.words).toFixed(1) : "0";
+    const linkAffinity = s.linkMsgs ? ((s.linkMsgs / s.count) * 100).toFixed(0) : "0";
+
+    let lateNight = 0;
+    for (const m of senderMsgs) {
+      if (!m.timestamp) continue;
+      const match = m.timestamp.match(/(\d{2}):(\d{2})/);
+      if (match) {
+        const hour = parseInt(match[1], 10);
+        if (hour >= 0 && hour < 6) lateNight += 1;
+      }
+    }
+    const lateNightPct = senderMsgs.length ? ((lateNight / senderMsgs.length) * 100).toFixed(0) : "0";
+
+    lines.push(`**${name}**`);
+    lines.push(`- ${s.count.toLocaleString()} messages · ${s.sharePct}% of chat`);
+    lines.push(`- Avg ${s.avgWords} words/msg · ${avgWordLen} chars/word`);
+    lines.push(`- ${emojiPerMsg} emojis/msg · ${linkAffinity}% messages contain links`);
+    lines.push(`- Replies to ${s.replyRatePct}% of messages · Received ${s.repliesRecv.toLocaleString()} replies`);
+    lines.push(`- ${lateNightPct}% of messages sent between midnight-6am`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+function buildTldr(stats: ChatStats): string {
+  const lines: string[] = [];
+  const senders = Object.entries(stats.senders);
+  const total = stats.totalMessages;
+
+  lines.push("## TL;DR");
+  lines.push("");
+
+  if (senders.length === 2) {
+    const [a, b] = senders;
+    const ratio = a[1].count > b[1].count
+      ? `${a[0]} messages ${(a[1].count / b[1].count).toFixed(1)}x more than ${b[0]}`
+      : b[1].count > a[1].count
+        ? `${b[0]} messages ${(b[1].count / a[1].count).toFixed(1)}x more than ${a[0]}`
+        : "Perfectly balanced — both sent the same amount";
+    lines.push(`- **${ratio}**`);
+  } else if (senders.length > 2) {
+    const [top] = senders;
+    lines.push(`- **${top[0]}** dominates with ${top[1].sharePct}% of all messages`);
+  }
+
+  if (stats.mostActiveDay) {
+    lines.push(`- Most intense day: **${fmtDate(stats.mostActiveDay.date)}** with ${stats.mostActiveDay.count} messages`);
+  }
+
+  if (stats.totalReplies) {
+    const replyPct = ((stats.totalReplies / total) * 100).toFixed(0);
+    lines.push(`- **${replyPct}%** of messages are replies — ${parseInt(replyPct) > 50 ? "heavy conversation" : "mostly independent messages"}`);
+  }
+
+  if (stats.mediaPct > 30) {
+    lines.push(`- Visual-heavy chat: ${stats.mediaPct}% of messages include media`);
+  } else if (stats.mediaPct < 10) {
+    lines.push(`- Text-focused chat: only ${stats.mediaPct}% of messages include media`);
+  }
+
+  const wordHuman = stats.totalWords > 1000000
+    ? `${(stats.totalWords / 1000000).toFixed(1)}M words`
+    : stats.totalWords > 1000
+      ? `${(stats.totalWords / 1000).toFixed(1)}K words`
+      : `${stats.totalWords} words`;
+  lines.push(`- Total output: **${wordHuman}** across ${stats.calendarDays} days`);
+
+  if (stats.topEmojis.length) {
+    const top3 = stats.topEmojis.slice(0, 3).map(([e, c]) => `${e}x${c}`).join(" ");
+    lines.push(`- Signature emojis: ${top3}`);
+  }
+
+  lines.push("");
+  return lines.join("\n");
+}
+
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -147,7 +305,7 @@ function formatMessage(
   return { block: lines.join("\n").trimEnd(), day: newDay };
 }
 
-function buildHeader(stats: ChatStats, options: ExportOptions): string {
+function buildHeader(stats: ChatStats, options: ExportOptions, messages?: Message[]): string {
   const { lean, fullStats, sourceFiles, title } = options;
   const lines: string[] = [];
   lines.push(`# ${title ?? "Telegram Chat Export"}`);
@@ -351,12 +509,38 @@ function buildHeader(stats: ChatStats, options: ExportOptions): string {
     lines.push("");
   }
 
+  // TL;DR
+  lines.push(buildTldr(stats));
+
+  // Activity heatmap
+  if (Object.keys(stats.dailyCounts).length > 14) {
+    lines.push("## Activity Heatmap");
+    lines.push("");
+    lines.push(heatmap(stats.dailyCounts, Math.min(16, Math.ceil(Object.keys(stats.dailyCounts).length / 7))));
+    lines.push("");
+  }
+
+  // Time distribution
+  if (messages && messages.length > 50) {
+    lines.push("## Time of Day Distribution");
+    lines.push("");
+    lines.push(timeDistribution(messages));
+    lines.push("");
+  }
+
+  // Sender personality profiles
+  if (messages && Object.keys(stats.senders).length > 0) {
+    lines.push("## Chat Personality Profiles");
+    lines.push("");
+    lines.push(senderPersonality(messages, stats));
+  }
+
   lines.push("---");
   return lines.join("\n");
 }
 
 export function exportMarkdown(messages: Message[], stats: ChatStats, options: ExportOptions): string {
-  const header = buildHeader(stats, options);
+  const header = buildHeader(stats, options, messages);
   const quoteLookup = options.quoteReplies
     ? new Map(messages.filter((m) => m.id).map((m) => [m.id as string, m] as const))
     : null;
